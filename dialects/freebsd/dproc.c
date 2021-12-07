@@ -120,13 +120,6 @@ enter_vn_text(va, n)
 }
 
 
-#if (__FreeBSD_version >= 700000)
-static int kf_cmp_fd(const void *a, const void *b)
-{
-    return ((struct kinfo_file*)b)->kf_fd - ((struct kinfo_file*)a)->kf_fd;
-}
-#endif
-
 static int
 read_kern_files(struct kinfo_proc *p, struct kern_files *kfiles)
 {
@@ -182,6 +175,21 @@ read_kern_files(struct kinfo_proc *p, struct kern_files *kfiles)
 
 #if (__FreeBSD_version >= 700000)
 
+/* Based on process_file() in lib/prfd.c */
+static void
+process_kinfo_file(struct kinfo_file *kf)
+{
+	Lf->off = kf->kf_offset;
+	if (kf->kf_ref_count) {
+	    if ((kf->kf_flags & (KF_FLAG_READ | KF_FLAG_WRITE)) == KF_FLAG_READ)
+		Lf->access = 'r';
+	    else if ((kf->kf_flags & (KF_FLAG_READ | KF_FLAG_WRITE)) == KF_FLAG_WRITE)
+		Lf->access = 'w';
+	    else if ((kf->kf_flags & (KF_FLAG_READ | KF_FLAG_WRITE)) == (KF_FLAG_READ | KF_FLAG_WRITE))
+		Lf->access = 'u';
+	}
+}
+
 static void
 process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short ckscko)
 {
@@ -190,7 +198,6 @@ process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short 
 	int i;
 
 	kf_files = kinfo_getfile(p->P_PID, &kf_count);
-	qsort(kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
 	for (i = 0; i < kf_count; i++) {
 	    if (!ckscko && kf_files[i].kf_fd == KF_FD_TYPE_CWD) {
 		alloc_lfile(CWD, -1);
@@ -217,7 +224,7 @@ process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short 
 		    fprintf(stderr, "%s: WARNING -- unsupported fd type %d\n", Pn, kf_files[i].kf_fd);
 	    } else {
 		alloc_lfile(NULL, kf_files[i].kf_fd);
-		/* FIXME: process it */
+		process_kinfo_file(&kf_files[i]);
 		if (Lf->sf)
 		    link_lfile();
 	    }
