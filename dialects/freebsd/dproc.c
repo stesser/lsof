@@ -53,6 +53,16 @@ _PROTOTYPE(static void get_kernel_access,(void));
 _PROTOTYPE(static void process_text,(KA_T vm));
 
 
+struct kern_files {
+	struct filedesc fd;
+#if	defined(HAS_FDESCENTTBL)
+	struct fdescenttbl fdt;
+#endif	/* defined(HAS_FDESCENTTBL) */
+	struct vnode *cdir;
+	struct vnode *rdir;
+	struct vnode *jdir;
+};
+
 /*
  * Local static values
  */
@@ -117,6 +127,230 @@ static int kf_cmp_fd(const void *a, const void *b)
 }
 #endif
 
+static int
+read_kern_files(struct kinfo_proc *p, struct kern_files *kfiles)
+{
+#if	defined(PWDDESC_KVM_LOAD_PWD)
+	struct pwddesc pd;
+#endif	/* defined(PWDDESC_KVM_LOAD_PWD) */
+
+#if	defined(HAS_PWD)
+	struct pwd pwd;
+	KA_T pwd_addr;
+#endif	/* defined(HAS_FDESCENTTBL) */
+
+	/*
+	 * Read file structure pointers.
+	 */
+	if (!p->P_FD
+	||  kread((KA_T)p->P_FD, (char *)&kfiles->fd, sizeof(kfiles->fd)))
+	    return 0;
+
+#if	defined(HAS_FDESCENTTBL)
+	if (!kfiles->fd.fd_files
+	||  kread((KA_T)kfiles->fd.fd_files, (char *)&kfiles->fdt, sizeof(kfiles->fdt)))
+	    return 0;
+	if (!kfiles->fd.fd_refcnt)
+	    return 0;
+#else	/* !defined(HAS_FDESCENTTBL) */
+	if (!kfiles->fd.fd_refcnt || kfiles->fd.fd_lastfile > kfiles->fd.fd_nfiles)
+	    return 0;
+#endif	/* defined(HAS_FDESCENTTBL) */
+
+#if	defined(HAS_PWD)
+	kfiles->cdir = kfiles->rdir = kfiles->jdir = NULL;
+#if	defined(PWDDESC_KVM_LOAD_PWD)
+	pwd_addr = (KA_T)PWDDESC_KVM_LOAD_PWD(&pd);
+#else   /* defined(PWDDESC_KVM_LOAD_PWD) */
+	pwd_addr = (KA_T)FILEDESC_KVM_LOAD_PWD(&kfiles->fd);
+#endif  /* defined(PWDDESC_KVM_LOAD_PWD) */
+	if (pwd_addr != 0) {
+	    if (!kread(pwd_addr, (char *)&pwd, sizeof(pwd))) {
+		kfiles->cdir = pwd.pwd_cdir;
+		kfiles->rdir = pwd.pwd_rdir;
+		kfiles->jdir = pwd.pwd_jdir;
+	    }
+	}
+#else
+	kfiles->cdir = kfiles->fd.fd_cdir;
+	kfiles->rdir = kfiles->fd.fd_rdir;
+	kfiles->jdir = kfiles->fd.fd_jdir;
+#endif
+	return 1;
+}
+
+static void
+process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short ckscko)
+{
+#if	defined(HAS_FILEDESCENT)
+	typedef struct filedescent ofb_t;
+#else	/* !defined(HAS_FILEDESCENT) */
+	typedef struct file* ofb_t;
+#endif	/* defined(HAS_FILEDESCENT) */
+
+#if	defined(HAS_FDESCENTTBL)
+	KA_T fa;
+#endif	/* defined(HAS_FDESCENTTBL) */
+
+	static ofb_t *ofb = NULL;
+	static int ofbb = 0;
+
+	int i, nf;
+	MALLOC_S nb;
+
+#if	defined(HASFSTRUCT) && !defined(HAS_FILEDESCENT)
+	static char *pof = (char *)NULL;
+	static int pofb = 0;
+#endif	/* defined(HASFSTRUCT) && !defiled(HAS_FILEDESCENT) */
+
+#if (__FreeBSD_version >= 700000)
+	struct kinfo_file *kf_files;
+	int kf_count;
+#endif
+
+	/*
+	 * Save current working directory information.
+	 */
+	if (!ckscko && kfiles->cdir) {
+	    alloc_lfile(CWD, -1);
+	    Cfp = (struct file *)NULL;
+	    process_node((KA_T)kfiles->cdir);
+	    if (Lf->sf)
+		link_lfile();
+	}
+	/*
+	 * Save root directory information.
+	 */
+	if (!ckscko && kfiles->rdir) {
+	    alloc_lfile(RTD, -1);
+	    Cfp = (struct file *)NULL;
+	    process_node((KA_T)kfiles->rdir);
+	    if (Lf->sf)
+		link_lfile();
+	}
+
+	/*
+	 * Save jail directory information.
+	 */
+	if (!ckscko && kfiles->jdir) {
+	    alloc_lfile("jld", -1);
+	    Cfp = (struct file *)NULL;
+	    process_node((KA_T)kfiles->jdir);
+	    if (Lf->sf)
+		link_lfile();
+	}
+
+	/*
+	 * Save information on the text file.
+	 */
+	if (!ckscko && p->P_VMSPACE)
+	    process_text((KA_T)p->P_VMSPACE);
+	/*
+	 * Read open file structure pointers.
+	 */
+
+#if	defined(HAS_FDESCENTTBL)
+	if ((nf = kfiles->fdt.fdt_nfiles) <= 0)
+	    return;
+#else	/* !defined(HAS_FDESCENTTBL) */
+	if (!kfiles->fd.fd_ofiles || (nf = kfiles->fd.fd_nfiles) <= 0)
+	    return;
+#endif	/* defined(HAS_FDESCENTTBL) */
+
+	nb = (MALLOC_S)(sizeof(ofb_t) * nf);
+	if (nb > ofbb) {
+	    if (!ofb)
+		ofb = (ofb_t *)malloc(nb);
+	    else
+		ofb = (ofb_t *)realloc((MALLOC_P *)ofb, nb);
+	    if (!ofb) {
+		(void) fprintf(stderr, "%s: PID %d, no file * space\n",
+		    Pn, p->P_PID);
+		Exit(1);
+	    }
+	    ofbb = nb;
+	}
+
+#if	defined(HAS_FDESCENTTBL)
+	fa = (KA_T)kfiles->fd.fd_files
+	   + (KA_T)offsetof(struct fdescenttbl, fdt_ofiles);
+	if (kread(fa, (char *)ofb, nb))
+	    return;
+#else	/* !defined(HAS_FDESCENTTBL) */
+	if (kread((KA_T)fd.fd_ofiles, (char *)ofb, nb))
+	    return;
+#endif	/* defined(HAS_FDESCENTTBL) */
+
+
+#if	defined(HASFSTRUCT) && !defined(HAS_FILEDESCENT)
+	if (Fsv & FSV_FG) {
+	    nb = (MALLOC_S)(sizeof(char) * nf);
+	    if (nb > pofb) {
+		if (!pof)
+		    pof = (char *)malloc(nb);
+		else
+		    pof = (char *)realloc((MALLOC_P *)pof, nb);
+		if (!pof) {
+		    (void) fprintf(stderr,
+			"%s: PID %d, no file flag space\n", Pn, p->P_PID);
+		    Exit(1);
+		}
+		pofb = nb;
+	    }
+	    if (!kfiles->fd.fd_ofileflags || kread((KA_T)kfiles->fd.fd_ofileflags, pof, nb))
+		zeromem(pof, nb);
+	}
+#endif	/* defined(HASFSTRUCT) && !defined(HAS_FILEDESCENT) */
+
+	/*
+	 * Save information on file descriptors.
+	 */
+#if (__FreeBSD_version >= 700000)
+	kf_count = 0;
+	kf_files = kinfo_getfile(p->P_PID, &kf_count);
+	qsort(kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
+#endif
+	for (i = 0; i < nf; i++) {
+#if (__FreeBSD_version >= 700000)
+	    struct kinfo_file key;
+	    struct kinfo_file *kf;
+	    key.kf_fd = i;
+	    kf = bsearch(&key, kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
+#endif
+
+#if	defined(HAS_FILEDESCENT)
+	    if ((Cfp = ofb[i].fde_file))
+#else	/* !defined(HAS_FILEDESCENT) */
+	    if ((Cfp = ofb[i]))
+#endif	/* defined(HAS_FILEDESCENT) */
+
+	    {
+		alloc_lfile(NULL, i);
+		process_file((KA_T)Cfp);
+#if (__FreeBSD_version >= 700000)
+		if (kf && kf->kf_type == KF_TYPE_VNODE)
+		    enter_nm(kf->kf_path);
+#endif
+		if (Lf->sf) {
+
+#if	defined(HASFSTRUCT)
+		    if (Fsv & FSV_FG)
+# if	defined(HAS_FILEDESCENT)
+			Lf->pof = (long)ofb[i].fde_flags;
+# else	/* !defined(HAS_FILEDESCENT) */
+			Lf->pof = (long)pof[i];
+# endif	/* defined(HAS_FILEDESCENT) */
+#endif	/* defined(HASFSTRUCT) */
+
+		    link_lfile();
+		}
+	    }
+	}
+#if (__FreeBSD_version >= 700000)
+	free(kf_files);
+#endif
+}
+
 /*
  * gather_proc_info() -- gather process information
  */
@@ -134,35 +368,9 @@ gather_proc_info()
 					 *	   including TCP and UDP
 					 *	   streams with eXPORT data,
 					 *	   where supported */
-	struct filedesc fd;
-#if	defined(PWDDESC_KVM_LOAD_PWD)
-	struct pwddesc pd;
-#endif	/* defined(PWDDESC_KVM_LOAD_PWD) */
-	int i, nf;
-	MALLOC_S nb;
 
-#if	defined(HAS_FILEDESCENT)
-	typedef struct filedescent ofb_t;
-#else	/* !defined(HAS_FILEDESCENT) */
-	typedef struct file* ofb_t;
-#endif	/* defined(HAS_FILEDESCENT) */
 
-#if	defined(HAS_FDESCENTTBL)
-	struct fdescenttbl fdt;
-	KA_T fa;
-#endif	/* defined(HAS_FDESCENTTBL) */
-
-#if	defined(HAS_PWD)
-	struct pwd pwd;
-	KA_T pwd_addr;
-#endif	/* defined(HAS_FDESCENTTBL) */
-
-	struct vnode *cdir;
-	struct vnode *rdir;
-	struct vnode *jdir;
-
-	static ofb_t *ofb = NULL;
-	static int ofbb = 0;
+	struct kern_files kfiles;
 	int pgid, pid;
 	int ppid = 0;
 	short pss, sf;
@@ -171,15 +379,7 @@ gather_proc_info()
 	uid_t uid;
 
 	struct kinfo_proc *p;
-#if (__FreeBSD_version >= 700000)
-	struct kinfo_file *kf_files;
-	int kf_count;
-#endif
 
-#if	defined(HASFSTRUCT) && !defined(HAS_FILEDESCENT)
-	static char *pof = (char *)NULL;
-	static int pofb = 0;
-#endif	/* defined(HASFSTRUCT) && !defiled(HAS_FILEDESCENT) */
 
 /*
  * Define socket and regular file conditional processing flags.
@@ -283,43 +483,8 @@ gather_proc_info()
 		continue;
 #endif	/* defined(HASTASKS) */
 
-	/*
-	 * Read file structure pointers.
-	 */
-	    if (!p->P_FD
-	    ||  kread((KA_T)p->P_FD, (char *)&fd, sizeof(fd)))
+	    if (!read_kern_files(p, &kfiles))
 		continue;
-
-#if	defined(HAS_FDESCENTTBL)
-	    if (!fd.fd_files
-	    ||  kread((KA_T)fd.fd_files, (char *)&fdt, sizeof(fdt)))
-		continue;
-	    if (!fd.fd_refcnt)
-		continue;
-#else	/* !defined(HAS_FDESCENTTBL) */
-	    if (!fd.fd_refcnt || fd.fd_lastfile > fd.fd_nfiles)
-		continue;
-#endif	/* defined(HAS_FDESCENTTBL) */
-
-#if	defined(HAS_PWD)
-	    cdir = rdir = jdir = NULL;
-#if	  defined(PWDDESC_KVM_LOAD_PWD)
-	    pwd_addr = (KA_T)PWDDESC_KVM_LOAD_PWD(&pd);
-#else   /* defined(PWDDESC_KVM_LOAD_PWD) */
-	    pwd_addr = (KA_T)FILEDESC_KVM_LOAD_PWD(&fd);
-#endif  /* defined(PWDDESC_KVM_LOAD_PWD) */
-	    if (pwd_addr != 0) {
-		    if (!kread(pwd_addr, (char *)&pwd, sizeof(pwd))) {
-			    cdir = pwd.pwd_cdir;
-			    rdir = pwd.pwd_rdir;
-			    jdir = pwd.pwd_jdir;
-		    }
-	    }
-#else
-	    cdir = fd.fd_cdir;
-	    rdir = fd.fd_rdir;
-	    jdir = fd.fd_jdir;
-#endif
 
 	/*
 	 * Allocate a local process structure.
@@ -353,147 +518,8 @@ gather_proc_info()
 	    Kpa = (KA_T)p->P_ADDR;
 #endif	/* defined(P_ADDR) */
 
-	/*
-	 * Save current working directory information.
-	 */
-	    if (!ckscko && cdir) {
-		alloc_lfile(CWD, -1);
-		Cfp = (struct file *)NULL;
-		process_node((KA_T)cdir);
-		if (Lf->sf)
-		    link_lfile();
-	    }
-	/*
-	 * Save root directory information.
-	 */
-	    if (!ckscko && rdir) {
-		alloc_lfile(RTD, -1);
-		Cfp = (struct file *)NULL;
-		process_node((KA_T)rdir);
-		if (Lf->sf)
-		    link_lfile();
-	    }
+	process_file_descriptors(p, &kfiles, ckscko);
 
-	/*
-	 * Save jail directory information.
-	 */
-	    if (!ckscko && jdir) {
-		alloc_lfile("jld", -1);
-		Cfp = (struct file *)NULL;
-		process_node((KA_T)jdir);
-		if (Lf->sf)
-		    link_lfile();
-	    }
-
-	/*
-	 * Save information on the text file.
-	 */
-	    if (!ckscko && p->P_VMSPACE)
-		process_text((KA_T)p->P_VMSPACE);
-	/*
-	 * Read open file structure pointers.
-	 */
-
-#if	defined(HAS_FDESCENTTBL)
-	    if ((nf = fdt.fdt_nfiles) <= 0)
-		continue;
-#else	/* !defined(HAS_FDESCENTTBL) */
-	    if (!fd.fd_ofiles || (nf = fd.fd_nfiles) <= 0)
-		continue;
-#endif	/* defined(HAS_FDESCENTTBL) */
-
-	    nb = (MALLOC_S)(sizeof(ofb_t) * nf);
-	    if (nb > ofbb) {
-		if (!ofb)
-		    ofb = (ofb_t *)malloc(nb);
-		else
-		    ofb = (ofb_t *)realloc((MALLOC_P *)ofb, nb);
-		if (!ofb) {
-		    (void) fprintf(stderr, "%s: PID %d, no file * space\n",
-			Pn, p->P_PID);
-		    Exit(1);
-		}
-		ofbb = nb;
-	    }
-
-#if	defined(HAS_FDESCENTTBL)
-	    fa = (KA_T)fd.fd_files
-	       + (KA_T)offsetof(struct fdescenttbl, fdt_ofiles);
-	    if (kread(fa, (char *)ofb, nb))
-		continue;
-#else	/* !defined(HAS_FDESCENTTBL) */
-	    if (kread((KA_T)fd.fd_ofiles, (char *)ofb, nb))
-		continue;
-#endif	/* defined(HAS_FDESCENTTBL) */
-
-
-#if	defined(HASFSTRUCT) && !defined(HAS_FILEDESCENT)
-	    if (Fsv & FSV_FG) {
-		nb = (MALLOC_S)(sizeof(char) * nf);
-		if (nb > pofb) {
-		    if (!pof)
-			pof = (char *)malloc(nb);
-		    else
-			pof = (char *)realloc((MALLOC_P *)pof, nb);
-		    if (!pof) {
-			(void) fprintf(stderr,
-			    "%s: PID %d, no file flag space\n", Pn, p->P_PID);
-			Exit(1);
-		    }
-		    pofb = nb;
-		}
-		if (!fd.fd_ofileflags || kread((KA_T)fd.fd_ofileflags, pof, nb))
-		    zeromem(pof, nb);
-	    }
-#endif	/* defined(HASFSTRUCT) && !defined(HAS_FILEDESCENT) */
-
-	/*
-	 * Save information on file descriptors.
-	 */
-#if (__FreeBSD_version >= 700000)
-	    kf_count = 0;
-	    kf_files = kinfo_getfile(p->P_PID, &kf_count);
-	    qsort(kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
-#endif
-	    for (i = 0; i < nf; i++) {
-#if (__FreeBSD_version >= 700000)
-		struct kinfo_file key;
-		struct kinfo_file *kf;
-		key.kf_fd = i;
-		kf = bsearch(&key, kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
-#endif
-
-#if	defined(HAS_FILEDESCENT)
-		if ((Cfp = ofb[i].fde_file))
-#else	/* !defined(HAS_FILEDESCENT) */
-		if ((Cfp = ofb[i]))
-#endif	/* defined(HAS_FILEDESCENT) */
-
-		{
-		    alloc_lfile(NULL, i);
-		    process_file((KA_T)Cfp);
-#if (__FreeBSD_version >= 700000)
-		    if (kf && kf->kf_type == KF_TYPE_VNODE)
-			enter_nm(kf->kf_path);
-#endif
-		    if (Lf->sf) {
-
-#if	defined(HASFSTRUCT)
-			if (Fsv & FSV_FG)
-# if	defined(HAS_FILEDESCENT)
-			    Lf->pof = (long)ofb[i].fde_flags;
-# else	/* !defined(HAS_FILEDESCENT) */
-			    Lf->pof = (long)pof[i];
-# endif	/* defined(HAS_FILEDESCENT) */
-#endif	/* defined(HASFSTRUCT) */
-
-			link_lfile();
-		    }
-		}
-	    }
-#if (__FreeBSD_version >= 700000)
-	    free(kf_files);
-#endif
 	/*
 	 * Unless threads (tasks) are being processed, examine results.
 	 */
