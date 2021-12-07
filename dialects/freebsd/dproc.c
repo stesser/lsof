@@ -214,7 +214,7 @@ process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short 
 		    link_lfile();
 	    } else if (!ckscko && kf_files[i].kf_fd < 0) {
 		if (!Fwarn)
-		    fprintf(stderr, "%s: WARNING -- unsupported fd type %d\n", pn, ks_files[i].kf_fd);
+		    fprintf(stderr, "%s: WARNING -- unsupported fd type %d\n", Pn, kf_files[i].kf_fd);
 	    } else {
 		alloc_lfile(NULL, kf_files[i].kf_fd);
 		/* FIXME: process it */
@@ -385,6 +385,10 @@ process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short 
 void
 gather_proc_info()
 {
+#if (__FreeBSD_version >= 700000)
+	int mib[3];
+	size_t len;
+#endif
 	short cckreg;			/* conditional status of regular file
 					 * checking:
 					 *     0 = unconditionally check
@@ -465,6 +469,28 @@ gather_proc_info()
 #define	KERN_PROC_PROC  KERN_PROC_ALL
 # endif	/* !defined(KERN_PROC_PROC) */
 
+#if (__FreeBSD_version >= 700000)
+	mib[0] = CTL_KERN;
+	mib[1] = KERN_PROC;
+	mib[2] = Ftask ? KERN_PROC_ALL : KERN_PROC_PROC;
+	len = 0;
+	if (sysctl(mib, 3, NULL, &len, NULL, 0) == 0) {
+	    P = malloc(len);
+	    if (sysctl(mib, 3, P, &len, NULL, 0) < 0) {
+		free(P);
+		P = NULL;
+	    }
+	}
+	if (P == NULL)
+	{
+	    fprintf(stderr, "%s: can't read process table: %s\n",
+		Pn,
+		strerror(errno)
+	    );
+	    Exit(1);
+	}
+	Np = len / sizeof(struct kinfo_file);
+#else
 	if ((P = kvm_getprocs(Kd, Ftask ? KERN_PROC_ALL : KERN_PROC_PROC,
 			      0, &Np))
 	== NULL)
@@ -478,6 +504,8 @@ gather_proc_info()
 	    );
 	    Exit(1);
 	}
+#endif /* (__FreeBSD_version >= 700000) */
+
 /*
  * Examine proc structures and their associated information.
  */
@@ -510,8 +538,10 @@ gather_proc_info()
 		continue;
 #endif	/* defined(HASTASKS) */
 
+#if (__FreeBSD_version < 700000)
 	    if (!read_kern_files(p, &kfiles))
 		continue;
+#endif
 
 	/*
 	 * Allocate a local process structure.
