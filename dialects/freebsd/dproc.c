@@ -647,7 +647,33 @@ get_nlist_path(ap)
 void
 initialize()
 {
+#if (__FreeBSD_version >= 700000)
+	if (geteuid() != 0) {
+	    int see_other_uids, see_other_gids, see_jail_proc;
+	    size_t len;
+	    see_other_uids = see_other_gids = see_jail_proc = 1;
+	    len = sizeof(int);
+	    sysctlbyname("security.bsd.see_other_uids", &see_other_uids, &len, NULL, 0);
+	    if (see_other_uids == 0 && !Fwarn)
+		(void) fprintf(stderr,
+		    "%s: WARNING -- security.bsd.see_other_uids==0, you won't see other users' processes.\n",
+		    Pn);
+	    len = sizeof(int);
+	    sysctlbyname("security.bsd.see_other_gids", &see_other_gids, &len, NULL, 0);
+	    if (see_other_gids == 0 && !Fwarn)
+		(void) fprintf(stderr,
+		    "%s: WARNING -- security.bsd.see_other_gids==0, you won't see other groups' processes.\n",
+		    Pn);
+	    len = sizeof(int);
+	    sysctlbyname("security.bsd.see_jail_proc", &see_jail_proc, &len, NULL, 0);
+	    if (see_jail_proc == 0 && !Fwarn)
+		(void) fprintf(stderr,
+		    "%s: WARNING -- security.bsd.see_jail_proc==0, you won't see jailed processes.\n",
+		    Pn);
+	}
+#else
 	get_kernel_access();
+#endif
 }
 
 
