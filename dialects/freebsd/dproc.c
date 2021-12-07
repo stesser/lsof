@@ -179,6 +179,54 @@ read_kern_files(struct kinfo_proc *p, struct kern_files *kfiles)
 	return 1;
 }
 
+
+#if (__FreeBSD_version >= 700000)
+
+static void
+process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short ckscko)
+{
+	struct kinfo_file *kf_files;
+	int kf_count;
+	int i;
+
+	kf_files = kinfo_getfile(p->P_PID, &kf_count);
+	qsort(kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
+	for (i = 0; i < kf_count; i++) {
+	    if (!ckscko && kf_files[i].kf_fd == KF_FD_TYPE_CWD) {
+		alloc_lfile(CWD, -1);
+		/* FIXME: process it */
+		if (Lf->sf)
+		    link_lfile();
+	    } else if (!ckscko && kf_files[i].kf_fd == KF_FD_TYPE_ROOT) {
+		alloc_lfile(RTD, -1);
+		/* FIXME: process it */
+		if (Lf->sf)
+		    link_lfile();
+	    } else if (!ckscko && kf_files[i].kf_fd == KF_FD_TYPE_JAIL) {
+		alloc_lfile("jld", -1);
+		/* FIXME: process it */
+		if (Lf->sf)
+		    link_lfile();
+	    } else if (!ckscko && kf_files[i].kf_fd == KF_FD_TYPE_TEXT) {
+		alloc_lfile(" txt", -1);
+		/* FIXME: process it */
+		if (Lf->sf)
+		    link_lfile();
+	    } else if (!ckscko && kf_files[i].kf_fd < 0) {
+		if (!Fwarn)
+		    fprintf(stderr, "%s: WARNING -- unsupported fd type %d\n", pn, ks_files[i].kf_fd);
+	    } else {
+		alloc_lfile(NULL, kf_files[i].kf_fd);
+		/* FIXME: process it */
+		if (Lf->sf)
+		    link_lfile();
+	    }
+	}
+	free(kf_files);
+}
+
+#else
+
 static void
 process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short ckscko)
 {
@@ -202,11 +250,6 @@ process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short 
 	static char *pof = (char *)NULL;
 	static int pofb = 0;
 #endif	/* defined(HASFSTRUCT) && !defiled(HAS_FILEDESCENT) */
-
-#if (__FreeBSD_version >= 700000)
-	struct kinfo_file *kf_files;
-	int kf_count;
-#endif
 
 	/*
 	 * Save current working directory information.
@@ -305,18 +348,7 @@ process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short 
 	/*
 	 * Save information on file descriptors.
 	 */
-#if (__FreeBSD_version >= 700000)
-	kf_count = 0;
-	kf_files = kinfo_getfile(p->P_PID, &kf_count);
-	qsort(kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
-#endif
 	for (i = 0; i < nf; i++) {
-#if (__FreeBSD_version >= 700000)
-	    struct kinfo_file key;
-	    struct kinfo_file *kf;
-	    key.kf_fd = i;
-	    kf = bsearch(&key, kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
-#endif
 
 #if	defined(HAS_FILEDESCENT)
 	    if ((Cfp = ofb[i].fde_file))
@@ -327,10 +359,6 @@ process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short 
 	    {
 		alloc_lfile(NULL, i);
 		process_file((KA_T)Cfp);
-#if (__FreeBSD_version >= 700000)
-		if (kf && kf->kf_type == KF_TYPE_VNODE)
-		    enter_nm(kf->kf_path);
-#endif
 		if (Lf->sf) {
 
 #if	defined(HASFSTRUCT)
@@ -346,10 +374,9 @@ process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short 
 		}
 	    }
 	}
-#if (__FreeBSD_version >= 700000)
-	free(kf_files);
-#endif
 }
+
+#endif /* __FreeBSD_version >= 700000 */
 
 /*
  * gather_proc_info() -- gather process information
