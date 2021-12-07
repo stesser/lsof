@@ -256,6 +256,13 @@ process_kqueue(ka)
 #endif	/* defined(HASKQUEUE) */
 
 
+void
+process_kfile_node(struct kinfo_file *kf)
+{
+	enter_nm(kf->kf_path);
+	/* TODO: more, as per below */
+}
+
 /*
  * process_node() - process vnode
  */

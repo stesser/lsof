@@ -188,6 +188,17 @@ process_kinfo_file(struct kinfo_file *kf)
 	    else if ((kf->kf_flags & (KF_FLAG_READ | KF_FLAG_WRITE)) == (KF_FLAG_READ | KF_FLAG_WRITE))
 		Lf->access = 'u';
 	}
+
+	switch (kf->kf_type) {
+	case KF_TYPE_VNODE:
+	    process_kfile_node(kf);
+	    break;
+	default:
+	    snpf(Namech, Namechl,
+		"file struct, ty=%d",
+		kf->kf_type);
+	    enter_nm(Namech);
+	}
 }
 
 static void
@@ -197,6 +208,7 @@ process_file_descriptors(struct kinfo_proc *p, struct kern_files *kfiles, short 
 	int kf_count;
 	int i;
 
+	kf_count = 0;
 	kf_files = kinfo_getfile(p->P_PID, &kf_count);
 	for (i = 0; i < kf_count; i++) {
 	    if (!ckscko && kf_files[i].kf_fd == KF_FD_TYPE_CWD) {
@@ -483,9 +495,11 @@ gather_proc_info()
 	len = 0;
 	if (sysctl(mib, 3, NULL, &len, NULL, 0) == 0) {
 	    P = malloc(len);
-	    if (sysctl(mib, 3, P, &len, NULL, 0) < 0) {
-		free(P);
-		P = NULL;
+	    if (P) {
+		if (sysctl(mib, 3, P, &len, NULL, 0) < 0) {
+		    free(P);
+		    P = NULL;
+		}
 	    }
 	}
 	if (P == NULL)
@@ -496,7 +510,7 @@ gather_proc_info()
 	    );
 	    Exit(1);
 	}
-	Np = len / sizeof(struct kinfo_file);
+	Np = len / sizeof(struct kinfo_proc);
 #else
 	if ((P = kvm_getprocs(Kd, Ftask ? KERN_PROC_ALL : KERN_PROC_PROC,
 			      0, &Np))
