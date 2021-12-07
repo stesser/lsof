@@ -35,6 +35,9 @@ static char copyright[] =
 #endif
 
 #include "lsof.h"
+#if (__FreeBSD_version >= 700000)
+# include <libutil.h>
+#endif
 
 /*
  * This is not an exact version but it should not matter. At worst there
@@ -107,6 +110,13 @@ enter_vn_text(va, n)
 }
 
 
+#if (__FreeBSD_version >= 700000)
+static int kf_cmp_fd(const void *a, const void *b)
+{
+    return ((struct kinfo_file*)b)->kf_fd - ((struct kinfo_file*)a)->kf_fd;
+}
+#endif
+
 /*
  * gather_proc_info() -- gather process information
  */
@@ -161,6 +171,10 @@ gather_proc_info()
 	uid_t uid;
 
 	struct kinfo_proc *p;
+#if (__FreeBSD_version >= 700000)
+	struct kinfo_file *kf_files;
+	int kf_count;
+#endif
 
 #if	defined(HASFSTRUCT) && !defined(HAS_FILEDESCENT)
 	static char *pof = (char *)NULL;
@@ -436,7 +450,18 @@ gather_proc_info()
 	/*
 	 * Save information on file descriptors.
 	 */
+#if (__FreeBSD_version >= 700000)
+	    kf_count = 0;
+	    kf_files = kinfo_getfile(p->P_PID, &kf_count);
+	    qsort(kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
+#endif
 	    for (i = 0; i < nf; i++) {
+#if (__FreeBSD_version >= 700000)
+		struct kinfo_file key;
+		struct kinfo_file *kf;
+		key.kf_fd = i;
+		kf = bsearch(&key, kf_files, kf_count, sizeof(struct kinfo_file), kf_cmp_fd);
+#endif
 
 #if	defined(HAS_FILEDESCENT)
 		if ((Cfp = ofb[i].fde_file))
@@ -447,6 +472,10 @@ gather_proc_info()
 		{
 		    alloc_lfile(NULL, i);
 		    process_file((KA_T)Cfp);
+#if (__FreeBSD_version >= 700000)
+		    if (kf && kf->kf_type == KF_TYPE_VNODE)
+			enter_nm(kf->kf_path);
+#endif
 		    if (Lf->sf) {
 
 #if	defined(HASFSTRUCT)
@@ -462,6 +491,9 @@ gather_proc_info()
 		    }
 		}
 	    }
+#if (__FreeBSD_version >= 700000)
+	    free(kf_files);
+#endif
 	/*
 	 * Unless threads (tasks) are being processed, examine results.
 	 */
