@@ -36,6 +36,14 @@ static char copyright[] =
 
 #include "lsof.h"
 
+/*
+ * This is not an exact version but it should not matter. At worst there
+ * is a small version window where this lsof does not compile on older
+ * -CURRENT.
+ */
+#if __FreeBSD_version >= 1300081
+#define HAS_PWD
+#endif
 
 _PROTOTYPE(static void get_kernel_access,(void));
 
@@ -66,7 +74,6 @@ cmp_xfiles_pid_fd(const void *a, const void *b)
 	}
 }
 
-
 static int
 read_xfiles(struct xfile **xfiles, size_t *count)
 {
@@ -90,8 +97,7 @@ read_xfiles(struct xfile **xfiles, size_t *count)
 	*count = 0;
 	return 1;
 }
-
-
+ 
 static int
 kf_flags_to_fflags(int kf_flags)
 {
@@ -260,7 +266,6 @@ process_file_descriptors(
 		    link_lfile();
 	    }
 	}
-	free(kfiles);
 }
 
 
@@ -453,7 +458,7 @@ gather_proc_info()
 	    Kpa = (KA_T)p->P_ADDR;
 #endif	/* defined(P_ADDR) */
 
-	process_file_descriptors(p, ckscko, xfiles, n_xfiles, pcbs);
+	    process_file_descriptors(p, ckscko, xfiles, n_xfiles, pcbs); 
 
 	/*
 	 * Unless threads (tasks) are being processed, examine results.
